@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doug-martin/goqu/v9"
 	migrate "github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/xuri/excelize/v2"
@@ -31,12 +32,27 @@ func main() {
 
 	flag.Parse()
 
-	if *sourceFile == "" {
+	if sourceFile == "" {
 		panic(ErrSourceFile)
 	}
 
-	if *databaseUrl == "" {
+	if databaseUrl == "" {
 		panic(ErrDatabaseUrl)
+	}
+
+	fmt.Println("The source file ", sourceFile)
+	f := &File{}
+	err := f.ReadFile(sourceFile)
+	if err != nil {
+		panic(err)
+	}
+
+	db := DB{
+		f: f,
+	}
+
+	_ = Dumper{
+		conn: db.conn,
 	}
 }
 
@@ -46,7 +62,8 @@ type Dumper struct {
 }
 
 //Dump dumps the excel file into the target database
-func (d Dump) Dump() error {
+func (d Dumper) Dump() error {
+	return nil
 }
 
 type File struct {
@@ -54,7 +71,7 @@ type File struct {
 }
 
 func (f File) ReadFile(filename string) error {
-	if file != "" {
+	if filename == "" {
 		return fmt.Errorf("Empty file name: Please provide a valid file name")
 	}
 
@@ -78,9 +95,9 @@ func (f File) ReadFile(filename string) error {
 
 func (f File) sheet() string {
 	list := f.f.GetSheetList()
-	if list < 1 {
+	if len(list) < 1 {
 		log.Println("Empty sheet list")
-		return nil
+		return ""
 	}
 
 	return list[0]
@@ -89,7 +106,8 @@ func (f File) sheet() string {
 func (f File) createTables() []string {
 	tables := make([]string, 0)
 	for _, v := range f.sheet() {
-		cols := f.f.GetCols(v)
+		fmt.Printf("The v value %v and the sheet type %t", v, f.sheet)
+		cols, _ := f.f.GetCols(string(v))
 		if len(cols) > 1 {
 			return nil
 		}
@@ -103,19 +121,20 @@ func (f File) createTables() []string {
 }
 
 func (f File) createValues(cols int) ([][]string, error) {
-	values := make([][cols]string, 0)
+	values := make([][]string, cols)
 	sheet := f.sheet()
 	values, err := f.f.GetRows(sheet)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to get sheet values from rows")
 	}
 
-	return values
+	return values, nil
 }
 
 type DB struct {
 	conn *sql.Conn
 	db   *sql.DB
+	f    *File
 }
 
 func NewDB(ctx context.Context, dsn, url string) *DB {
@@ -153,7 +172,8 @@ func (d DB) CreateTable(ctx context.Context, tableCols []string, tablename strin
 		return fmt.Errorf("Error executing query: %v\n", err)
 	}
 
-	if res.RowsAffected > 0 {
+	val, _ := res.RowsAffected()
+	if val > 0 {
 		log.Printf("%s successfully created!", tablename)
 	}
 	return nil
@@ -179,5 +199,27 @@ func (d DB) Migrate(tableCols []string, url string) error {
 		return err
 	}
 
+	return nil
+}
+
+func (d DB) Build(tableName string, tableCols []string) error {
+	if d.f == nil {
+		return fmt.Errorf("File error")
+	}
+
+	vals, err := d.f.createValues(len(tableCols))
+	if err != nil {
+		return fmt.Errorf("Unable to generate values %v", err)
+	}
+
+	ta := goqu.Insert(tableName).Cols(tableCols)
+
+	v := len(vals)
+	for i := 0; i < v; i++ {
+		ta.Vals(goqu.Vals{vals[i]})
+	}
+
+	insertSQL, args, _ := ta.ToSQL()
+	fmt.Printf("The insertSQL %s args %s", insertSQL, args)
 	return nil
 }

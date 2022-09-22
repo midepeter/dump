@@ -3,6 +3,7 @@ module github.com/midepeter/dump
 go 1.18
 
 require (
+	github.com/doug-martin/goqu/v9 v9.18.0 // indirect
 	github.com/golang-migrate/migrate/v4 v4.15.2 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect

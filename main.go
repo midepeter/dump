@@ -10,9 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doug-martin/goqu/v9"
-	migrate "github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "github.com/lib/pq"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -40,29 +39,52 @@ func main() {
 		panic(ErrDatabaseUrl)
 	}
 
-	fmt.Println("The source file ", sourceFile)
-	f := &File{}
-	err := f.ReadFile(sourceFile)
+	f, err := ReadFile(sourceFile)
 	if err != nil {
 		panic(err)
 	}
 
-	db := DB{
-		f: f,
+	fileName := strings.Split(sourceFile, ".")
+
+	dsn := "postgres"
+	url := "postgres://midepeter:password@localhost:5432/sample"
+	db := NewDB(context.Background(), dsn, url, &f)
+
+	d := Dumper{
+		f:  f,
+		db: db,
 	}
 
-	_ = Dumper{
-		conn: db.conn,
+	fmt.Println("The db conn", db)
+	fmt.Println("The filename is", fileName)
+	err = d.Dump(fileName[0], 4)
+	if err != nil {
+		panic(err)
 	}
 }
 
 type Dumper struct {
-	conn   *sql.Conn
-	tables []string
+	f  File
+	db *DB
 }
 
 //Dump dumps the excel file into the target database
-func (d Dumper) Dump() error {
+func (d Dumper) Dump(name string, indexKey int) error {
+	rows, err := d.f.GetRows()
+	if err != nil {
+		return fmt.Errorf("Unable to fetch file rows ", err)
+	}
+
+	err = d.db.CreateTable(context.Background(), rows[indexKey], name)
+	if err != nil {
+		return fmt.Errorf("Unable to create table: %v", err)
+	}
+
+	err = d.db.Import(rows, 5)
+	if err != nil {
+		return fmt.Errorf("Unable to import rows into the database %v", err)
+	}
+
 	return nil
 }
 
@@ -70,30 +92,30 @@ type File struct {
 	f *excelize.File
 }
 
-func (f File) ReadFile(filename string) error {
+func ReadFile(filename string) (File, error) {
+	var f File
 	if filename == "" {
-		return fmt.Errorf("Empty file name: Please provide a valid file name")
+		return f, fmt.Errorf("Empty file name: Please provide a valid file name")
 	}
 
 	ext := strings.Split(filename, ".")
 	if len(ext) != 2 {
-		return fmt.Errorf("Invalid file format")
+		return f, fmt.Errorf("Invalid file format")
 	}
 
 	if ext[1] == "xlsx" || ext[1] == "xls" {
 		openFile, err := excelize.OpenFile(filename)
 		if err != nil {
 			log.Fatalln("Unable to open excel file ", err)
-			return err
+			return f, err
 		}
-
 		f.f = openFile
 	}
 
-	return nil
+	return f, nil
 }
 
-func (f File) sheet() string {
+func (f File) Sheet() string {
 	list := f.f.GetSheetList()
 	if len(list) < 1 {
 		log.Println("Empty sheet list")
@@ -103,32 +125,16 @@ func (f File) sheet() string {
 	return list[0]
 }
 
-func (f File) createTables() []string {
-	tables := make([]string, 0)
-	for _, v := range f.sheet() {
-		fmt.Printf("The v value %v and the sheet type %t", v, f.sheet)
-		cols, _ := f.f.GetCols(string(v))
-		if len(cols) > 1 {
-			return nil
-		}
-
-		for _, v := range cols {
-			tables = v
-		}
-	}
-
-	return tables
-}
-
-func (f File) createValues(cols int) ([][]string, error) {
-	values := make([][]string, cols)
-	sheet := f.sheet()
-	values, err := f.f.GetRows(sheet)
+func (f File) GetRows() ([][]string, error) {
+	tables := make([][]string, 0)
+	sheet := f.Sheet()
+	log.Println("The name of the sheet here", len(sheet))
+	tables, err := f.f.GetRows(sheet)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to get sheet values from rows")
+		return tables, nil
 	}
 
-	return values, nil
+	return tables, nil
 }
 
 type DB struct {
@@ -137,22 +143,26 @@ type DB struct {
 	f    *File
 }
 
-func NewDB(ctx context.Context, dsn, url string) *DB {
+func NewDB(ctx context.Context, driver, url string, f *File) *DB {
 	if url == "" {
 		return nil
 	}
 
-	db, err := sql.Open(dsn, url)
+	db, err := sql.Open(driver, url)
 	if err != nil {
 		log.Println("Error setting up database")
-		return nil
+		panic(err)
 	}
 
-	dbConn, _ := db.Conn(ctx)
+	dbConn, err := db.Conn(ctx)
+	if err != nil {
+		panic(err)
+	}
 
 	return &DB{
 		conn: dbConn,
 		db:   db,
+		f:    f,
 	}
 }
 
@@ -161,7 +171,7 @@ func (d DB) CreateTable(ctx context.Context, tableCols []string, tablename strin
 		return errors.New("Invalid table column length")
 	}
 
-	stmt := fmt.Sprintf("CREATE TABLE %s IF NOT EXISTS", tablename)
+	stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s", tablename)
 	s, err := d.conn.PrepareContext(ctx, stmt)
 	if err != nil {
 		return fmt.Errorf("Invalid query: %v\n", err)
@@ -186,40 +196,16 @@ func (d DB) Ping(ctx context.Context) {
 	d.conn.PingContext(ctx)
 }
 
-func (d DB) Migrate(tableCols []string, url string) error {
-	m, err := migrate.New("", url)
-	if err != nil {
-		log.Fatalf("Error occured during migration: %v", err)
-		return err
+func (d DB) Import(tableValues [][]string, contentIdx int) error {
+	//Check each row one after the other
+	//Infer the value type
+	for idx, row := range tableValues {
+		if idx >= contentIdx {
+			for _, v := range row {
+				fmt.Printf("The rows %s values type %T", idx, v)
+				return nil
+			}
+		}
 	}
-
-	err = m.Up()
-	if err != nil {
-		log.Fatalf("Error occured during migration: %v", err)
-		return err
-	}
-
-	return nil
-}
-
-func (d DB) Build(tableName string, tableCols []string) error {
-	if d.f == nil {
-		return fmt.Errorf("File error")
-	}
-
-	vals, err := d.f.createValues(len(tableCols))
-	if err != nil {
-		return fmt.Errorf("Unable to generate values %v", err)
-	}
-
-	ta := goqu.Insert(tableName).Cols(tableCols)
-
-	v := len(vals)
-	for i := 0; i < v; i++ {
-		ta.Vals(goqu.Vals{vals[i]})
-	}
-
-	insertSQL, args, _ := ta.ToSQL()
-	fmt.Printf("The insertSQL %s args %s", insertSQL, args)
 	return nil
 }

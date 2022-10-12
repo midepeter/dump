@@ -166,7 +166,7 @@ func NewDB(ctx context.Context, driver, url string, f *File) *DB {
 	}
 }
 
-func (d DB) CreateTable(ctx context.Context, tableCols []string, tablename string) error {
+func (d DB) CreateTable(ctx context.Context, tableCols map[string]interface{}, tablename string) error {
 	if len(tableCols) < 1 {
 		return errors.New("Invalid table column length")
 	}

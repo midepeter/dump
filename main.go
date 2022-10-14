@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/lib/pq"
+	"github.com/midepeter/dump/builder"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -75,12 +76,12 @@ func (d Dumper) Dump(name string, indexKey int) error {
 		return fmt.Errorf("Unable to fetch file rows ", err)
 	}
 
-	err = d.db.CreateTable(context.Background(), rows[indexKey], name)
-	if err != nil {
-		return fmt.Errorf("Unable to create table: %v", err)
-	}
+	//err = d.db.CreateTable(context.Background(), rows[indexKey], name)
+	//	if err != nil {
+	//	return fmt.Errorf("Unable to create table: %v", err)
+	//	}
 
-	err = d.db.Import(rows, 5)
+	err = d.db.Import(rows, 5, rows[indexKey])
 	if err != nil {
 		return fmt.Errorf("Unable to import rows into the database %v", err)
 	}
@@ -166,7 +167,7 @@ func NewDB(ctx context.Context, driver, url string, f *File) *DB {
 	}
 }
 
-func (d DB) CreateTable(ctx context.Context, tableCols map[string]interface{}, tablename string) error {
+func (d DB) CreateTable(ctx context.Context, tableCols []string, tablename string) error {
 	if len(tableCols) < 1 {
 		return errors.New("Invalid table column length")
 	}
@@ -196,15 +197,15 @@ func (d DB) Ping(ctx context.Context) {
 	d.conn.PingContext(ctx)
 }
 
-func (d DB) Import(tableValues [][]string, contentIdx int) error {
+func (d DB) Import(tableValues [][]string, contentIdx int, tableCols []string) error {
 	//Check each row one after the other
 	//Infer the value type
+
 	for idx, row := range tableValues {
 		if idx >= contentIdx {
-			for _, v := range row {
-				fmt.Printf("The rows %s values type %T", idx, v)
-				return nil
-			}
+			insert := builder.NewInsertBuilder()
+			query, _ := insert.Table("remote").Columns(tableCols...).Values(row...).ToSQL()
+			fmt.Printf("%s\n", query)
 		}
 	}
 	return nil

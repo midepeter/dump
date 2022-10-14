@@ -6,9 +6,9 @@ type createBuilder struct {
 	ifNotExists bool
 }
 
-func NewCreateBuilder() Generator {
-	return &insertBuilder{
-		values: make([]string, 0),
+func NewCreateBuilder() QueryBuilder {
+	return &createBuilder{
+		columns: make([]string, 0),
 	}
 }
 
@@ -29,12 +29,11 @@ func (c *createBuilder) IfNotExists(exist bool) *createBuilder {
 	return c
 }
 
-func (c *createBuilder) SQL() (string, interface{}) {
-	join := NewJoiner([]Ge{}, " ", "", "", true)
+func (c *createBuilder) ToSQL() (string, interface{}) {
 	return "", nil
 }
 
-/* 
+/*
 *	CREATE TABLE user IF NOT EXISTS (
 	*		name VARCHAR(50)
 	*		email VARCHAR(50)

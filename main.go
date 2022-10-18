@@ -76,13 +76,13 @@ func (d Dumper) Dump(name string, indexKey int) error {
 		return fmt.Errorf("Unable to fetch file rows ", err)
 	}
 
-	//err = d.db.CreateTable(context.Background(), rows[indexKey], name)
-	//	if err != nil {
-	//	return fmt.Errorf("Unable to create table: %v", err)
-	//	}
-
-	err = d.db.Import(rows, 5, rows[indexKey])
+	err = d.db.CreateTable(context.Background(), rows[indexKey+1], rows[indexKey], name)
 	if err != nil {
+		return fmt.Errorf("Unable to create table: %v", err)
+	}
+
+	str := d.db.Import(rows, 5, rows[indexKey])
+	if str != "" {
 		return fmt.Errorf("Unable to import rows into the database %v", err)
 	}
 
@@ -167,26 +167,24 @@ func NewDB(ctx context.Context, driver, url string, f *File) *DB {
 	}
 }
 
-func (d DB) CreateTable(ctx context.Context, tableCols []string, tablename string) error {
+func (d DB) CreateTable(ctx context.Context, values []string, tableCols []string, tablename string) error {
 	if len(tableCols) < 1 {
 		return errors.New("Invalid table column length")
 	}
 
-	stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s", tablename)
-	s, err := d.conn.PrepareContext(ctx, stmt)
-	if err != nil {
-		return fmt.Errorf("Invalid query: %v\n", err)
-	}
+	b := builder.NewCreateBuilder()
+	b.Table(tablename).Columns(tableCols...).IfNotExists(false).Values(values...)
+	query, _ := b.ToSQL()
+	fmt.Println("The create sql table query ", query)
+	//res, err := s.ExecContext(ctx)
+	//if err != nil {
+	//	return fmt.Errorf("Error executing query: %v\n", err)
+	//}
 
-	res, err := s.ExecContext(ctx)
-	if err != nil {
-		return fmt.Errorf("Error executing query: %v\n", err)
-	}
-
-	val, _ := res.RowsAffected()
-	if val > 0 {
-		log.Printf("%s successfully created!", tablename)
-	}
+	//val, _ := res.RowsAffected()
+	//if val > 0 {
+	//	log.Printf("%s successfully created!", tablename)
+	//}
 	return nil
 }
 
@@ -197,16 +195,21 @@ func (d DB) Ping(ctx context.Context) {
 	d.conn.PingContext(ctx)
 }
 
-func (d DB) Import(tableValues [][]string, contentIdx int, tableCols []string) error {
+func (d DB) Import(tableValues [][]string, contentIdx int, tableCols []string) string {
 	//Check each row one after the other
 	//Infer the value type
+	insert := builder.NewInsertBuilder()
+	insert.Table("remote").Columns(tableCols...)
+	var query string
 
 	for idx, row := range tableValues {
 		if idx >= contentIdx {
-			insert := builder.NewInsertBuilder()
-			query, _ := insert.Table("remote").Columns(tableCols...).Values(row...).ToSQL()
-			fmt.Printf("%s\n", query)
+			insert.Values(row...)
+		}
+
+		if idx == len(tableValues)-1 {
+			query, _ = insert.ToSQL()
 		}
 	}
-	return nil
+	return query
 }
